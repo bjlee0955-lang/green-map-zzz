@@ -1,0 +1,8 @@
+{
+	"appId": "com.greenmapz.app",
+	"appName": "Green Map-Z",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}

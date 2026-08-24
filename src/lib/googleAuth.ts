@@ -17,9 +17,16 @@ async function signInWithGoogleNative(): Promise<void> {
   await Browser.open({ url: data.url });
 
   await new Promise<void>((resolve, reject) => {
-    const listenerPromise = CapApp.addListener("appUrlOpen", async ({ url }) => {
-      if (!url.startsWith(NATIVE_REDIRECT_URL)) return;
-      (await listenerPromise).remove();
+    // 딥링크 리다이렉트가 android:launchMode="singleTask" 환경에서 두 번 전달될 때가 있어
+    // exchangeCodeForSession()이 같은 코드로 중복 호출되는 것을 막는다 (첫 호출만 성공하고
+    // 두 번째는 "invalid flow state" 에러가 남는 원인이었음).
+    let handled = false;
+    let handle: { remove: () => Promise<void> } | null = null;
+
+    CapApp.addListener("appUrlOpen", async ({ url }) => {
+      if (handled || !url.startsWith(NATIVE_REDIRECT_URL)) return;
+      handled = true;
+      handle?.remove().catch(() => {});
       Browser.close().catch(() => {});
       try {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(url);
@@ -28,6 +35,9 @@ async function signInWithGoogleNative(): Promise<void> {
       } catch (e) {
         reject(e);
       }
+    }).then((h) => {
+      handle = h;
+      if (handled) h.remove().catch(() => {});
     });
   });
 }

@@ -8,3 +8,6 @@ android/captures/
 android/app/release/
 *.log
 .DS_Store
+.env
+.env.local
+.env.*.local

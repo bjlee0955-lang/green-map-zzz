@@ -22,6 +22,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Supabase Google 로그인 완료 후 앱으로 돌아오기 위한 딥링크 (googleAuth.ts 참고) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.greenmapz.app" android:host="login-callback" />
+            </intent-filter>
+
         </activity>
 
         <provider

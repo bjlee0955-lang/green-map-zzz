@@ -9,8 +9,10 @@ import "leaflet/dist/leaflet.css";
 import { Capacitor } from "@capacitor/core";
 import { Camera as CapCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Geolocation } from "@capacitor/geolocation";
+import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
+import { signInWithGoogle } from "../lib/googleAuth";
 
-type Screen = "landing" | "login" | "signup" | "home" | "upload" | "result" | "map" | "myrecords" | "settings";
+type Screen = "landing" | "login" | "signup" | "googleProfile" | "home" | "upload" | "result" | "map" | "myrecords" | "settings";
 type Role = "student" | "teacher";
 type SchoolKind = "" | "초등학교" | "중학교" | "고등학교";
 
@@ -62,6 +64,33 @@ function loadCurrentUserId(): string | null {
 function saveCurrentUserId(id: string | null) {
   if (id) localStorage.setItem(LS_CUR, id);
   else localStorage.removeItem(LS_CUR);
+}
+
+// ── Supabase(Google) 로그인 사용자 → 기존 로컬 사용자 모델 매핑 ────────────────
+function googleSessionUserToStoredUser(u: { id: string; email?: string | null; user_metadata?: Record<string, any> }): StoredUser {
+  const meta = u.user_metadata ?? {};
+  return {
+    userId: u.id,
+    password: "",
+    name: meta.full_name || meta.name || (u.email ? u.email.split("@")[0] : "사용자"),
+    email: u.email ?? "",
+    school: "",
+    schoolKind: "",
+    grade: "",
+    class: "",
+    role: "student",
+  };
+}
+// 기존 로컬 목록에 있으면 학교/학년 등 저장된 정보를 유지하면서 이름/이메일만 최신화
+function upsertGoogleUser(googleUser: StoredUser): StoredUser {
+  const users = loadUsers();
+  const idx = users.findIndex((u) => u.userId === googleUser.userId);
+  const merged: StoredUser = idx >= 0
+    ? { ...users[idx], name: googleUser.name, email: googleUser.email }
+    : googleUser;
+  if (idx >= 0) users[idx] = merged; else users.push(merged);
+  saveUsers(users);
+  return merged;
 }
 
 // ── Guest (비회원) session ───────────────────────────────────────────────────
@@ -304,6 +333,54 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
   }
 }
 
+// ── Google 로그인 버튼 ───────────────────────────────────────────────────────
+function GoogleIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/>
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.6 8.3 6.3 14.7z"/>
+      <path fill="#4CAF50" d="M24 44c5.5 0 10.4-1.9 14.1-5.1l-6.5-5.5C29.4 35 26.9 36 24 36c-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.5l6.5 5.5C39.9 36.9 44 30.9 44 24c0-1.3-.1-2.7-.4-3.5z"/>
+    </svg>
+  );
+}
+
+function GoogleLoginButton({ label = "Google로 계속하기" }: { label?: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleClick = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      setError(err?.message ?? "Google 로그인에 실패했습니다.");
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        className="w-full bg-card text-foreground rounded-2xl py-4 font-bold text-base border border-border shadow-sm hover:bg-secondary/50 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+        style={{ fontFamily: "Nunito, sans-serif" }}
+      >
+        <GoogleIcon size={18} />
+        {loading ? "이동 중..." : label}
+      </button>
+      {error && (
+        <div className="flex items-center gap-2 bg-destructive/10 rounded-xl px-4 py-3 mt-2">
+          <AlertCircle size={15} className="text-destructive shrink-0" />
+          <p className="text-sm text-destructive font-semibold">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Landing Screen ──────────────────────────────────────────────────────────
 function LandingScreen({ onLogin, onSignup, onGuest }: { onLogin: () => void; onSignup: () => void; onGuest: () => void }) {
   return (
@@ -356,6 +433,7 @@ function LandingScreen({ onLogin, onSignup, onGuest }: { onLogin: () => void; on
             <User size={18} />
             로그인
           </button>
+          <GoogleLoginButton />
           <button
             onClick={onSignup}
             className="w-full bg-card text-foreground rounded-2xl py-4 font-bold text-base border border-border shadow-sm hover:bg-secondary/50 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
@@ -452,6 +530,14 @@ function LoginScreen({ onBack, onSuccess }: {
           >
             로그인
           </button>
+
+          <div className="flex items-center gap-3 py-1">
+            <div className="flex-1 h-px bg-border" />
+            <span className="text-xs text-muted-foreground">또는</span>
+            <div className="flex-1 h-px bg-border" />
+          </div>
+
+          <GoogleLoginButton />
         </div>
       </div>
     </div>
@@ -606,6 +692,80 @@ function SignupScreen({ onBack, onComplete }: {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Google 로그인 최초 가입자용 추가 정보 입력 화면 ──────────────────────────
+function GoogleProfileScreen({ user, onComplete }: { user: StoredUser; onComplete: (updated: StoredUser) => void }) {
+  const [role, setRole] = useState<Role>("student");
+  const [name, setName] = useState(user.name);
+  const [school, setSchool] = useState("");
+  const [schoolKind, setSchoolKind] = useState<SchoolKind>("");
+  const [grade, setGrade] = useState("");
+  const [klass, setKlass] = useState("");
+  const isStudent = role === "student";
+  const maxGrade = schoolKind === "초등학교" ? 6 : 3;
+  const canSubmit = !!name && !!school && !!schoolKind;
+
+  return (
+    <div className="flex flex-col min-h-screen bg-background">
+      <div className="px-5 pt-12 pb-4">
+        <h2 className="font-extrabold text-xl text-foreground" style={{ fontFamily: "Nunito, sans-serif" }}>거의 다 됐어요!</h2>
+        <p className="text-xs text-muted-foreground mt-1">{user.email}로 로그인했어요 · 학교 정보만 알려주세요</p>
+      </div>
+
+      <div className="flex-1 px-5 pb-10 overflow-y-auto space-y-5">
+        <div>
+          <label className="text-sm font-bold text-foreground block mb-2" style={{ fontFamily: "Nunito, sans-serif" }}>계정 유형</label>
+          <div className="grid grid-cols-2 gap-2">
+            {([["student", "학생", BookOpen], ["teacher", "교사", School]] as const).map(([r, label, Icon]) => (
+              <button key={r} onClick={() => setRole(r as Role)} className={`rounded-xl py-3 flex items-center justify-center gap-2 text-sm font-bold border transition-all ${role === r ? "bg-primary text-primary-foreground border-primary shadow-md" : "bg-card text-foreground border-border hover:border-primary/40"}`} style={{ fontFamily: "Nunito, sans-serif" }}>
+                <Icon size={15} />{label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="text-sm font-bold text-foreground block mb-1.5" style={{ fontFamily: "Nunito, sans-serif" }}>이름</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="홍길동" className="w-full bg-input-background rounded-xl px-4 py-3.5 text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-ring/40 border border-transparent focus:border-primary/30 transition-all" />
+        </div>
+        <div>
+          <label className="text-sm font-bold text-foreground block mb-1.5" style={{ fontFamily: "Nunito, sans-serif" }}>학교 이름</label>
+          <input value={school} onChange={(e) => setSchool(e.target.value)} placeholder="예) 서울" className="w-full bg-input-background rounded-xl px-4 py-3.5 text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-ring/40 border border-transparent focus:border-primary/30 transition-all" />
+        </div>
+        <div>
+          <label className="text-sm font-bold text-foreground block mb-2" style={{ fontFamily: "Nunito, sans-serif" }}>학교 종류</label>
+          <div className="grid grid-cols-3 gap-2">
+            {(["초등학교", "중학교", "고등학교"] as SchoolKind[]).map((k) => (
+              <button key={k} onClick={() => { setSchoolKind(k); setGrade(""); }} className={`rounded-xl py-3 text-sm font-bold border transition-all ${schoolKind === k ? "bg-primary text-primary-foreground border-primary shadow-md" : "bg-card text-foreground border-border hover:border-primary/40"}`} style={{ fontFamily: "Nunito, sans-serif" }}>{k}</button>
+            ))}
+          </div>
+        </div>
+        {isStudent && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-bold text-foreground block mb-1.5" style={{ fontFamily: "Nunito, sans-serif" }}>학년</label>
+              <select value={grade} onChange={(e) => setGrade(e.target.value)} disabled={!schoolKind} className="w-full bg-input-background rounded-xl px-4 py-3.5 text-foreground outline-none border border-transparent focus:ring-2 focus:ring-ring/40 transition-all appearance-none disabled:opacity-50">
+                <option value="">선택</option>
+                {Array.from({ length: maxGrade }, (_, i) => i + 1).map((g) => <option key={g}>{g}학년</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-bold text-foreground block mb-1.5" style={{ fontFamily: "Nunito, sans-serif" }}>반</label>
+              <input value={klass} onChange={(e) => setKlass(e.target.value)} placeholder="예) 3" className="w-full bg-input-background rounded-xl px-4 py-3.5 text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-ring/40 border border-transparent focus:border-primary/30 transition-all" />
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => onComplete({ ...user, role, name, school, schoolKind, grade, class: klass })}
+          disabled={!canSubmit}
+          className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-bold text-base shadow-md disabled:opacity-40 hover:bg-primary/90 active:scale-[0.98] transition-all"
+          style={{ fontFamily: "Nunito, sans-serif" }}
+        >
+          시작하기
+        </button>
       </div>
     </div>
   );
@@ -1669,6 +1829,29 @@ export default function App() {
     if (user) { setCurrentUser(user); setObservations(loadObservations()); setScreen("home"); }
   }, []);
 
+  // Supabase(Google) 로그인 세션 감지 — 로그인 성공 시 홈으로 진입
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const enterWithGoogleSession = (sUser: any) => {
+      const merged = upsertGoogleUser(googleSessionUserToStoredUser(sUser));
+      saveCurrentUserId(merged.userId);
+      setCurrentUser(merged);
+      setObservations(loadObservations());
+      // 최초 Google 가입자(학교 정보 없음)는 짧은 추가 정보 입력 화면으로
+      setScreen(merged.school ? "home" : "googleProfile");
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) enterWithGoogleSession(data.session.user);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session?.user) enterWithGoogleSession(session.user);
+    });
+
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
   // Apply dark mode to <html> so Tailwind's `dark:` variants (if any) and any
   // custom CSS variables can respond globally.
   useEffect(() => {
@@ -1700,6 +1883,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    supabase.auth.signOut().catch(() => {});
     saveCurrentUserId(null);
     setCurrentUser(null);
     setObservations([]);
@@ -1731,6 +1915,11 @@ export default function App() {
     setCurrentUser(updated);
   };
 
+  const handleGoogleProfileComplete = (updated: StoredUser) => {
+    handleUpdateUser(updated);
+    setScreen("home");
+  };
+
   const handleSignupPrompt = () => {
     // 게스트 세션 종료 후 회원가입 화면으로 이동 (관찰기록은 로컬에 남아있음)
     saveCurrentUserId(null);
@@ -1753,6 +1942,9 @@ export default function App() {
       )}
       {screen === "signup" && (
         <SignupScreen onBack={() => setScreen("landing")} onComplete={handleLoginSuccess} />
+      )}
+      {screen === "googleProfile" && currentUser && (
+        <GoogleProfileScreen user={currentUser} onComplete={handleGoogleProfileComplete} />
       )}
       {screen === "home" && currentUser && (
         <HomeScreen

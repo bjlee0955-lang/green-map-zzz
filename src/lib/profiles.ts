@@ -11,7 +11,7 @@ export interface RemoteProfile {
   class: string;
 }
 
-export async function fetchProfile(userId: string): Promise<RemoteProfile | null> {
+export async function fetchProfile(userId: string): Promise<{ profile: RemoteProfile | null; error: string | null }> {
   const { data, error } = await supabase
     .from("profiles")
     .select("id, name, email, role, school, school_kind, grade, class")
@@ -19,12 +19,16 @@ export async function fetchProfile(userId: string): Promise<RemoteProfile | null
     .maybeSingle();
   if (error) {
     console.error("프로필 조회 실패:", error.message);
-    return null;
+    return { profile: null, error: error.message };
   }
-  return data;
+  return { profile: data, error: null };
 }
 
-export async function upsertProfile(profile: RemoteProfile): Promise<void> {
+export async function upsertProfile(profile: RemoteProfile): Promise<{ error: string | null }> {
   const { error } = await supabase.from("profiles").upsert(profile);
-  if (error) console.error("프로필 저장 실패:", error.message);
+  if (error) {
+    console.error("프로필 저장 실패:", error.message);
+    return { error: error.message };
+  }
+  return { error: null };
 }

@@ -1866,15 +1866,19 @@ export default function App() {
       const base = googleSessionUserToStoredUser(sUser);
       // 서버(Supabase profiles 테이블)에 저장된 프로필이 있으면 그걸 우선 사용 —
       // 앱을 지웠다 다시 깔아도 같은 구글 계정으로 로그인하면 학교 정보가 복원됨
-      const remote = await fetchProfile(base.userId);
+      const { profile: remote, error: fetchError } = await fetchProfile(base.userId);
+      if (fetchError) alert(`프로필 서버 조회 실패: ${fetchError}`);
+      // 회원가입 트리거가 이름/역할만 채운 빈 row를 미리 만들어두므로, row가
+      // 있다는 것만으로는 온보딩 완료 여부를 알 수 없다 — school까지 채워져 있어야 완료로 본다.
+      const isComplete = !!remote?.school;
       const merged = remote ? remoteProfileToStoredUser(remote, base.email) : upsertGoogleUser(base);
       // 로컬 캐시도 최신 상태로 동기화 (다음 실행 시 오프라인에서도 바로 보이도록)
       upsertGoogleUser(merged);
       saveCurrentUserId(merged.userId);
       setCurrentUser(merged);
       setObservations(loadObservations());
-      // 서버에 프로필이 없는 최초 Google 가입자는 짧은 추가 정보 입력 화면으로
-      setScreen(remote ? "home" : "googleProfile");
+      // 서버 프로필이 없거나 아직 학교 정보가 없는 최초 Google 가입자는 추가 정보 입력 화면으로
+      setScreen(isComplete ? "home" : "googleProfile");
     };
 
     supabase.auth.getSession().then(({ data }) => {
@@ -1952,7 +1956,9 @@ export default function App() {
     // Google 계정은 Supabase profiles 테이블에도 반영 — 앱 재설치 후 같은 계정으로
     // 로그인해도 학교/학년 등 정보가 그대로 복원되도록
     if (updated.authProvider === "google") {
-      upsertProfile(storedUserToRemoteProfile(updated)).catch(() => {});
+      upsertProfile(storedUserToRemoteProfile(updated)).then(({ error }) => {
+        if (error) alert(`프로필 서버 저장 실패: ${error}`);
+      });
     }
   };
 

@@ -35,7 +35,6 @@ function storedUserToRemoteProfile(u: StoredUser): RemoteProfile {
   return {
     id: u.userId,
     name: u.name,
-    email: u.email,
     role: u.role,
     school: u.school,
     school_kind: u.schoolKind,
@@ -102,7 +101,7 @@ function remoteProfileToStoredUser(p: RemoteProfile, fallbackEmail: string): Sto
     userId: p.id,
     password: "",
     name: p.name,
-    email: p.email || fallbackEmail,
+    email: fallbackEmail,
     school: p.school,
     schoolKind: p.school_kind,
     grade: p.grade,

@@ -52,8 +52,16 @@ async function signInWithGoogleNative(): Promise<void> {
         return;
       }
 
+      // exchangeCodeForSession()은 전체 콜백 URL이 아니라 code 값 자체를 인자로 받는다.
+      // (URL 전체를 넘기면 서버가 그 값을 그대로 auth_code로 찾다가 "invalid flow state"로 거부함)
+      const code = params.get("code");
+      if (!code) {
+        reject(new Error(`콜백 URL에 code 파라미터가 없습니다.\n원본: ${url}`));
+        return;
+      }
+
       try {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(url);
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         if (exchangeError) reject(new Error(`${exchangeError.message}\n원본: ${url}`));
         else resolve();
       } catch (e: any) {

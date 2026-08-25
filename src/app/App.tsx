@@ -372,9 +372,9 @@ function GoogleLoginButton({ label = "Google로 계속하기" }: { label?: strin
         {loading ? "이동 중..." : label}
       </button>
       {error && (
-        <div className="flex items-center gap-2 bg-destructive/10 rounded-xl px-4 py-3 mt-2">
-          <AlertCircle size={15} className="text-destructive shrink-0" />
-          <p className="text-sm text-destructive font-semibold">{error}</p>
+        <div className="flex items-start gap-2 bg-destructive/10 rounded-xl px-4 py-3 mt-2">
+          <AlertCircle size={15} className="text-destructive shrink-0 mt-0.5" />
+          <p className="text-sm text-destructive font-semibold whitespace-pre-wrap break-all">{error}</p>
         </div>
       )}
     </div>

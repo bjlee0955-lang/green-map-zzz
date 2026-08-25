@@ -11,6 +11,7 @@ import { Camera as CapCamera, CameraResultType, CameraSource } from "@capacitor/
 import { Geolocation } from "@capacitor/geolocation";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { signInWithGoogle } from "../lib/googleAuth";
+import { fetchProfile, upsertProfile, type RemoteProfile } from "../lib/profiles";
 
 type Screen = "landing" | "login" | "signup" | "googleProfile" | "home" | "upload" | "result" | "map" | "myrecords" | "settings";
 type Role = "student" | "teacher";
@@ -27,6 +28,20 @@ interface StoredUser {
   class: string;
   role: Role;
   isGuest?: boolean;
+  authProvider?: "google";
+}
+
+function storedUserToRemoteProfile(u: StoredUser): RemoteProfile {
+  return {
+    id: u.userId,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    school: u.school,
+    school_kind: u.schoolKind,
+    grade: u.grade,
+    class: u.class,
+  };
 }
 
 interface PlantObservation {
@@ -79,6 +94,21 @@ function googleSessionUserToStoredUser(u: { id: string; email?: string | null; u
     grade: "",
     class: "",
     role: "student",
+    authProvider: "google",
+  };
+}
+function remoteProfileToStoredUser(p: RemoteProfile, fallbackEmail: string): StoredUser {
+  return {
+    userId: p.id,
+    password: "",
+    name: p.name,
+    email: p.email || fallbackEmail,
+    school: p.school,
+    schoolKind: p.school_kind,
+    grade: p.grade,
+    class: p.class,
+    role: p.role,
+    authProvider: "google",
   };
 }
 // 기존 로컬 목록에 있으면 학교/학년 등 저장된 정보를 유지하면서 이름/이메일만 최신화
@@ -1832,13 +1862,19 @@ export default function App() {
   // Supabase(Google) 로그인 세션 감지 — 로그인 성공 시 홈으로 진입
   useEffect(() => {
     if (!isSupabaseConfigured) return;
-    const enterWithGoogleSession = (sUser: any) => {
-      const merged = upsertGoogleUser(googleSessionUserToStoredUser(sUser));
+    const enterWithGoogleSession = async (sUser: any) => {
+      const base = googleSessionUserToStoredUser(sUser);
+      // 서버(Supabase profiles 테이블)에 저장된 프로필이 있으면 그걸 우선 사용 —
+      // 앱을 지웠다 다시 깔아도 같은 구글 계정으로 로그인하면 학교 정보가 복원됨
+      const remote = await fetchProfile(base.userId);
+      const merged = remote ? remoteProfileToStoredUser(remote, base.email) : upsertGoogleUser(base);
+      // 로컬 캐시도 최신 상태로 동기화 (다음 실행 시 오프라인에서도 바로 보이도록)
+      upsertGoogleUser(merged);
       saveCurrentUserId(merged.userId);
       setCurrentUser(merged);
       setObservations(loadObservations());
-      // 최초 Google 가입자(학교 정보 없음)는 짧은 추가 정보 입력 화면으로
-      setScreen(merged.school ? "home" : "googleProfile");
+      // 서버에 프로필이 없는 최초 Google 가입자는 짧은 추가 정보 입력 화면으로
+      setScreen(remote ? "home" : "googleProfile");
     };
 
     supabase.auth.getSession().then(({ data }) => {
@@ -1913,6 +1949,11 @@ export default function App() {
       saveUsers(next);
     }
     setCurrentUser(updated);
+    // Google 계정은 Supabase profiles 테이블에도 반영 — 앱 재설치 후 같은 계정으로
+    // 로그인해도 학교/학년 등 정보가 그대로 복원되도록
+    if (updated.authProvider === "google") {
+      upsertProfile(storedUserToRemoteProfile(updated)).catch(() => {});
+    }
   };
 
   const handleGoogleProfileComplete = (updated: StoredUser) => {

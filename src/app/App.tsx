@@ -1014,6 +1014,9 @@ function UploadScreen({ onBack, onResult }: {
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source,
+        // 카메라 원본(고화질) 사진을 그대로 DataUrl로 변환하면 메모리 부족으로 앱이
+        // 튕길 수 있어 네이티브 단에서 미리 축소한다 (최종 리사이즈는 compressImage가 담당)
+        width: 1600,
       });
       if (photo.dataUrl) {
         const compressed = await compressImage(photo.dataUrl);

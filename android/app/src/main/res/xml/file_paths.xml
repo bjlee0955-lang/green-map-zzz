@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
+    <!-- Capacitor Camera 플러그인이 사진을 실제로 저장하는 위치
+         (activity.getExternalFilesDir(DIRECTORY_PICTURES)) -->
+    <external-files-path name="my_images" path="Pictures/" />
     <cache-path name="my_cache_images" path="." />
+    <external-path name="my_external_storage" path="." />
 </paths>

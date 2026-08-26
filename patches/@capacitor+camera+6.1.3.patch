@@ -1,8 +1,8 @@
 diff --git a/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java b/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
-index d2a52ac..82b4257 100644
+index d2a52ac..fd63aca 100644
 --- a/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
 +++ b/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
-@@ -425,18 +425,61 @@ public class CameraPlugin extends Plugin {
+@@ -425,18 +425,59 @@ public class CameraPlugin extends Plugin {
              call.reject(IMAGE_PROCESS_NO_FILE_ERROR);
              return;
          }
@@ -22,7 +22,7 @@ index d2a52ac..82b4257 100644
 +            BitmapFactory.Options bmOptions = new BitmapFactory.Options();
 +            int reqWidth = settings.getWidth();
 +            int reqHeight = settings.getHeight();
-+            // 둘 다 미지정이면 메모리 보호를 위한 상한을 적용한다.
++            // With neither dimension requested, cap the decode to protect memory.
 +            if (reqWidth <= 0 && reqHeight <= 0) {
 +                reqWidth = 2048;
 +            }
@@ -44,13 +44,11 @@ index d2a52ac..82b4257 100644
 +    }
  
 -        returnResult(call, bitmap, contentUri);
-+    /**
-+     * Largest power-of-two subsample that still leaves the decoded bitmap at least as large as the
-+     * requested box, so the later aspect-preserving resize has no upscaling to do. A dimension of 0
-+     * means "unconstrained" (matching ImageUtils.resize), and must not hold the subsampling back —
-+     * getPhoto({ width }) with no height is the common case, and treating the missing height as a
-+     * constraint would keep full-resolution decodes for ordinary 4:3 photos.
-+     */
++    // Largest power-of-two subsample that still leaves the decoded bitmap at least as large as the
++    // requested box, so the later aspect-preserving resize has no upscaling to do. A dimension of 0
++    // means unconstrained (matching ImageUtils.resize) and must not hold the subsampling back:
++    // getPhoto({ width }) with no height is the common case, and treating the missing height as a
++    // constraint would keep full-resolution decodes for ordinary 4:3 photos.
 +    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
 +        final int height = options.outHeight;
 +        final int width = options.outWidth;

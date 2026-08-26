@@ -1,0 +1,60 @@
+diff --git a/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java b/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
+index d2a52ac..a42d785 100644
+--- a/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
++++ b/node_modules/@capacitor/camera/android/src/main/java/com/capacitorjs/plugins/camera/CameraPlugin.java
+@@ -425,18 +425,48 @@ public class CameraPlugin extends Plugin {
+             call.reject(IMAGE_PROCESS_NO_FILE_ERROR);
+             return;
+         }
+-        // Load the image as a Bitmap
++        // Load the image as a Bitmap, downsampled to roughly the requested output size instead
++        // of decoding the full camera-resolution image (often 12MP+) which can exceed the
++        // process's memory budget and get silently killed by the OS before any exception fires.
+         File f = new File(imageFileSavePath);
+-        BitmapFactory.Options bmOptions = new BitmapFactory.Options();
+         Uri contentUri = Uri.fromFile(f);
+-        Bitmap bitmap = BitmapFactory.decodeFile(imageFileSavePath, bmOptions);
++        try {
++            BitmapFactory.Options boundsOptions = new BitmapFactory.Options();
++            boundsOptions.inJustDecodeBounds = true;
++            BitmapFactory.decodeFile(imageFileSavePath, boundsOptions);
+ 
+-        if (bitmap == null) {
+-            call.reject(USER_CANCELLED);
+-            return;
++            BitmapFactory.Options bmOptions = new BitmapFactory.Options();
++            int reqWidth = settings.getWidth() > 0 ? settings.getWidth() : 1600;
++            int reqHeight = settings.getHeight() > 0 ? settings.getHeight() : 1600;
++            bmOptions.inSampleSize = calculateInSampleSize(boundsOptions, reqWidth, reqHeight);
++            Bitmap bitmap = BitmapFactory.decodeFile(imageFileSavePath, bmOptions);
++
++            if (bitmap == null) {
++                call.reject(USER_CANCELLED);
++                return;
++            }
++
++            returnResult(call, bitmap, contentUri);
++        } catch (OutOfMemoryError err) {
++            call.reject("Out of memory");
+         }
++    }
+ 
+-        returnResult(call, bitmap, contentUri);
++    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
++        final int height = options.outHeight;
++        final int width = options.outWidth;
++        int inSampleSize = 1;
++        if (reqWidth <= 0 || reqHeight <= 0 || width <= 0 || height <= 0) {
++            return inSampleSize;
++        }
++        if (height > reqHeight || width > reqWidth) {
++            final int halfHeight = height / 2;
++            final int halfWidth = width / 2;
++            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
++                inSampleSize *= 2;
++            }
++        }
++        return inSampleSize;
+     }
+ 
+     public void processPickedImage(PluginCall call, ActivityResult result) {

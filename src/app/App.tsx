@@ -946,6 +946,124 @@ function compressImage(dataUrl: string): Promise<string> {
   });
 }
 
+// ── In-app camera ───────────────────────────────────────────────────────────
+// 시스템 카메라 앱으로 나갔다 오면 안드로이드가 메모리 회수를 위해 우리 액티비티를
+// 없애버려서, 돌아왔을 때 웹뷰가 통째로 재시작된다(= 촬영한 사진과 화면 상태가 전부
+// 사라지고 홈으로 튕김). 앱을 벗어나지 않고 웹뷰 안에서 직접 촬영해 그 왕복을 없앤다.
+function InAppCamera({ onCapture, onCancel, onFallback }: {
+  onCapture: (dataUrl: string) => void;
+  onCancel: () => void;
+  onFallback: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
+
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("이 기기에서는 앱 내 카메라를 사용할 수 없습니다.");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setReady(true);
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message ?? String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      stopStream();
+    };
+  }, []);
+
+  const shoot = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")!.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    stopStream();
+    onCapture(dataUrl);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      <div className="flex items-center gap-3 px-4 pt-12 pb-3">
+        <button
+          onClick={() => { stopStream(); onCancel(); }}
+          className="w-9 h-9 flex items-center justify-center rounded-xl bg-white/10"
+        >
+          <X size={20} className="text-white" />
+        </button>
+        <p className="text-white font-bold" style={{ fontFamily: "Nunito, sans-serif" }}>식물 촬영</p>
+      </div>
+
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+        <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+        {!ready && !error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <div className="w-10 h-10 border-[3px] border-white/30 border-t-white rounded-full animate-spin" />
+            <p className="text-white/80 text-sm">카메라를 준비하는 중...</p>
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-8">
+            <AlertCircle size={32} className="text-white/80" />
+            <p className="text-white text-sm text-center whitespace-pre-wrap break-words">{error}</p>
+            <button
+              onClick={() => { stopStream(); onFallback(); }}
+              className="bg-white text-black rounded-2xl px-5 py-3 font-bold text-sm"
+              style={{ fontFamily: "Nunito, sans-serif" }}
+            >
+              기본 카메라 앱으로 촬영하기
+            </button>
+            <button onClick={() => { stopStream(); onCancel(); }} className="text-white/70 text-sm font-semibold">
+              닫기
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!error && (
+        <div className="pb-10 pt-5 flex items-center justify-center">
+          <button
+            onClick={shoot}
+            disabled={!ready}
+            className="w-20 h-20 rounded-full bg-white border-4 border-white/40 disabled:opacity-40 active:scale-95 transition-transform"
+            aria-label="촬영"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Upload Screen (real camera + GPS) ────────────────────────────────────────
 function UploadScreen({ onBack, onResult }: {
   onBack: () => void;
@@ -956,6 +1074,8 @@ function UploadScreen({ onBack, onResult }: {
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  const [cameraError, setCameraError] = useState("");
   // Ref keeps latest GPS value accessible inside setTimeout closures
   const gpsRef = useRef<{ lat: number; lng: number; address: string } | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -1027,8 +1147,19 @@ function UploadScreen({ onBack, onResult }: {
       // User cancelled — ignore
       if (!String(err).includes("cancelled") && !String(err).includes("cancel")) {
         console.error("Camera error:", err);
+        // 조용히 실패하면 원인을 알 수 없으므로 화면에도 남긴다
+        setCameraError(err?.message ?? String(err));
       }
     }
+  };
+
+  // 앱 내 카메라로 찍은 사진 처리
+  const handleInAppCapture = async (dataUrl: string) => {
+    setShowCamera(false);
+    setCameraError("");
+    const compressed = await compressImage(dataUrl);
+    setImgDataUrl(compressed);
+    fetchGps();
   };
 
   const [showGpsWaitModal, setShowGpsWaitModal] = useState(false);
@@ -1120,9 +1251,11 @@ function UploadScreen({ onBack, onResult }: {
         {!imgDataUrl && !analyzing && (
           <div className="space-y-3">
             <button
-              onClick={() => Capacitor.isNativePlatform()
-                ? handleNativeCamera(CameraSource.Camera)
-                : cameraInputRef.current?.click()}
+              onClick={() => {
+                setCameraError("");
+                if (Capacitor.isNativePlatform()) setShowCamera(true);
+                else cameraInputRef.current?.click();
+              }}
               className="w-full rounded-3xl border-2 border-dashed border-primary/40 bg-secondary/30 h-64 flex flex-col items-center justify-center gap-4 hover:bg-secondary/50 transition-colors"
             >
               <div className="w-20 h-20 bg-primary rounded-3xl flex items-center justify-center shadow-lg">
@@ -1143,6 +1276,12 @@ function UploadScreen({ onBack, onResult }: {
               <ImageOff size={16} />
               갤러리에서 선택
             </button>
+            {cameraError && (
+              <div className="flex items-start gap-2 bg-destructive/10 rounded-xl px-4 py-3">
+                <AlertCircle size={15} className="text-destructive shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive font-semibold whitespace-pre-wrap break-all">{cameraError}</p>
+              </div>
+            )}
           </div>
         )}
 
@@ -1257,6 +1396,18 @@ function UploadScreen({ onBack, onResult }: {
             </div>
           </div>
         </div>
+      )}
+
+      {showCamera && (
+        <InAppCamera
+          onCapture={handleInAppCapture}
+          onCancel={() => setShowCamera(false)}
+          onFallback={() => {
+            // 웹뷰 내 카메라를 못 쓰는 기기에서는 기존 시스템 카메라 방식으로 대체
+            setShowCamera(false);
+            handleNativeCamera(CameraSource.Camera);
+          }}
+        />
       )}
     </div>
   );

@@ -12,6 +12,7 @@ import { Geolocation } from "@capacitor/geolocation";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { signInWithGoogle } from "../lib/googleAuth";
 import { fetchProfile, upsertProfile, type RemoteProfile } from "../lib/profiles";
+import { loadModelAssets } from "../lib/modelStore";
 
 type Screen = "landing" | "login" | "signup" | "googleProfile" | "home" | "upload" | "result" | "map" | "myrecords" | "settings";
 type Role = "student" | "teacher";
@@ -248,30 +249,32 @@ import * as ort from "onnxruntime-web/wasm";
 ort.env.wasm.numThreads = 1;
 
 const COLORS = ["#2d6a4f", "#52b788", "#95d5b2"] as const;
-const MODEL_URL = "./model/plant_classifier.onnx";
-const LABELS_URL = "./model/labels.json";
 const IMG_SIZE = 224;
 // ImageNet 정규화 값 (모델 학습 시 사용한 것과 동일해야 함)
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 
-let sessionPromise: Promise<ort.InferenceSession> | null = null;
-let labelsPromise: Promise<string[]> | null = null;
+// 모델과 라벨은 Supabase Storage에서 받아온다(없으면 캐시 → 동봉본 순). 둘은 항상
+// 같은 출처에서 짝으로 와야 클래스 순서가 어긋나지 않으므로 한 번에 함께 불러온다.
+let assetsPromise: Promise<{ session: ort.InferenceSession; labels: string[] }> | null = null;
 
-function getSession(): Promise<ort.InferenceSession> {
-  if (!sessionPromise) {
-    sessionPromise = ort.InferenceSession.create(MODEL_URL, {
-      executionProviders: ["wasm"],
-    });
+function getModelAssets(): Promise<{ session: ort.InferenceSession; labels: string[] }> {
+  if (!assetsPromise) {
+    assetsPromise = loadModelAssets()
+      .then(async ({ modelData, labels, source, version }) => {
+        console.log(`AI 모델 로드: ${source}${version ? ` (${version})` : ""}, ${labels.length}종`);
+        const session = await ort.InferenceSession.create(modelData, {
+          executionProviders: ["wasm"],
+        });
+        return { session, labels };
+      })
+      .catch((e) => {
+        // 실패한 약속을 남겨두면 다음 시도까지 계속 같은 에러가 나므로 초기화한다.
+        assetsPromise = null;
+        throw e;
+      });
   }
-  return sessionPromise;
-}
-
-function getLabels(): Promise<string[]> {
-  if (!labelsPromise) {
-    labelsPromise = fetch(LABELS_URL).then((r) => r.json());
-  }
-  return labelsPromise;
+  return assetsPromise;
 }
 
 // 이미지를 224x224로 리사이즈(짧은 변 256 기준 center-crop)한 뒤
@@ -323,7 +326,7 @@ function softmax(logits: Float32Array | number[]): number[] {
 }
 
 async function identifyPlant(imgDataUrl: string): Promise<AiResult[]> {
-  const [session, labels] = await Promise.all([getSession(), getLabels()]);
+  const { session, labels } = await getModelAssets();
   const inputData = await preprocessImage(imgDataUrl);
   const tensor = new ort.Tensor("float32", inputData, [1, 3, IMG_SIZE, IMG_SIZE]);
 

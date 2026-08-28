@@ -258,6 +258,32 @@ const STD = [0.229, 0.224, 0.225];
 // 같은 출처에서 짝으로 와야 클래스 순서가 어긋나지 않으므로 한 번에 함께 불러온다.
 let assetsPromise: Promise<{ session: ort.InferenceSession; labels: string[] }> | null = null;
 
+// 모델만 새로 올리고 labels.json을 같이 올리지 않으면, 판별은 성공하지만 엉뚱한 종 이름이
+// 확신에 찬 얼굴로 표시된다(에러가 안 나서 알아채기 어렵다). 종 수가 어긋나면 아예 막는다.
+function labelMismatchError(modelClasses: number, labelCount: number): Error {
+  return new Error(
+    `AI 모델과 종 목록이 맞지 않습니다 (모델 ${modelClasses}종 / 목록 ${labelCount}종).\n` +
+      `모델을 교체하셨다면 labels.json도 함께 올려주세요.`
+  );
+}
+
+// 출력 shape의 마지막 숫자 차원을 클래스 수로 본다. 내보내기 방식에 따라 이 차원이
+// 심볼릭('batch' 같은 문자열)일 수 있어 확인이 불가능하면 여기서는 넘어가고,
+// 판별 직전 실제 출력 길이로 다시 검사한다.
+function checkLabelCount(session: ort.InferenceSession, labels: string[]): void {
+  let classes: number | null = null;
+  try {
+    const meta = session.outputMetadata?.[0];
+    if (meta && meta.isTensor) {
+      const numeric = meta.shape.filter((d): d is number => typeof d === "number");
+      if (numeric.length) classes = numeric[numeric.length - 1];
+    }
+  } catch {
+    return;
+  }
+  if (classes !== null && classes !== labels.length) throw labelMismatchError(classes, labels.length);
+}
+
 function getModelAssets(): Promise<{ session: ort.InferenceSession; labels: string[] }> {
   if (!assetsPromise) {
     assetsPromise = loadModelAssets()
@@ -266,6 +292,7 @@ function getModelAssets(): Promise<{ session: ort.InferenceSession; labels: stri
         const session = await ort.InferenceSession.create(modelData, {
           executionProviders: ["wasm"],
         });
+        checkLabelCount(session, labels);
         return { session, labels };
       })
       .catch((e) => {
@@ -333,6 +360,9 @@ async function identifyPlant(imgDataUrl: string): Promise<AiResult[]> {
   const outputs = await session.run({ input: tensor });
   const outputTensor = outputs.output ?? outputs[Object.keys(outputs)[0]];
   const logits = outputTensor.data as Float32Array;
+  // 실제 출력 길이로 하는 최종 검사 (모델의 클래스 차원이 심볼릭이라 로드 시점에
+  // 확인하지 못했더라도 여기서는 반드시 걸린다)
+  if (logits.length !== labels.length) throw labelMismatchError(logits.length, labels.length);
   const probs = softmax(logits);
 
   // top-3 인덱스 추출
@@ -1524,7 +1554,7 @@ function ResultScreen({ capture, userName, userId, onBack, onSave }: {
             <AlertCircle size={18} className="text-destructive shrink-0 mt-0.5" />
             <div>
               <p className="font-bold text-sm text-destructive mb-1">판별 실패</p>
-              <p className="text-xs text-destructive/80">{error}</p>
+              <p className="text-xs text-destructive/80 whitespace-pre-wrap break-words">{error}</p>
             </div>
           </div>
           <button

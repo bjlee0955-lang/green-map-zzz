@@ -31,6 +31,18 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 /**
+ * 저장에 쓸 계정 id는 반드시 인증 세션에서 직접 읽는다. 앱이 들고 있는 사용자 정보는
+ * 예전 계정의 값이 남아 있을 수 있는데, Storage 정책과 테이블 정책은 auth.uid() 기준이라
+ * 그 둘이 어긋나면 "row-level security policy" 위반으로 거절된다.
+ */
+async function currentAuthUserId(): Promise<{ id: string | null; error: string | null }> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return { id: null, error: error.message };
+  if (!data.user) return { id: null, error: "로그인 정보가 없습니다. 다시 로그인해 주세요." };
+  return { id: data.user.id, error: null };
+}
+
+/**
  * 사진을 Storage에 올린 뒤 기록 한 건을 저장한다. 사진 업로드가 실패하면
  * image_path가 NOT NULL이라 행을 만들 수 없으므로 거기서 멈춘다.
  */
@@ -45,7 +57,10 @@ export async function saveObservationToServer(params: {
   address: string;
   createdAt: string;
 }): Promise<{ imagePath: string | null; error: string | null }> {
-  const path = storagePath(params.userId, params.id);
+  const { id: authUserId, error: authError } = await currentAuthUserId();
+  if (!authUserId) return { imagePath: null, error: authError };
+
+  const path = storagePath(authUserId, params.id);
 
   try {
     const blob = await dataUrlToBlob(params.imgDataUrl);
@@ -59,7 +74,7 @@ export async function saveObservationToServer(params: {
 
   const { error: insertError } = await supabase.from("observations").insert({
     id: params.id,
-    user_id: params.userId,
+    user_id: authUserId,
     species_name: params.speciesName,
     confidence: params.confidence,
     image_path: path,
@@ -78,13 +93,17 @@ export async function saveObservationToServer(params: {
   return { imagePath: path, error: null };
 }
 
-export async function fetchMyObservations(
-  userId: string
-): Promise<{ rows: RemoteObservation[]; error: string | null }> {
+export async function fetchMyObservations(): Promise<{
+  rows: RemoteObservation[];
+  error: string | null;
+}> {
+  const { id: authUserId, error: authError } = await currentAuthUserId();
+  if (!authUserId) return { rows: [], error: authError };
+
   const { data, error } = await supabase
     .from("observations")
     .select("id, user_id, species_name, confidence, image_path, lat, lng, address, created_at")
-    .eq("user_id", userId)
+    .eq("user_id", authUserId)
     .order("created_at", { ascending: true });
 
   if (error) return { rows: [], error: error.message };
@@ -92,11 +111,16 @@ export async function fetchMyObservations(
 }
 
 export async function deleteObservationFromServer(
-  userId: string,
   observationId: string
 ): Promise<{ error: string | null }> {
+  const { id: authUserId, error: authError } = await currentAuthUserId();
+  if (!authUserId) return { error: authError };
+
   const { error } = await supabase.from("observations").delete().eq("id", observationId);
   if (error) return { error: error.message };
-  await supabase.storage.from(PHOTO_BUCKET).remove([storagePath(userId, observationId)]).catch(() => {});
+  await supabase.storage
+    .from(PHOTO_BUCKET)
+    .remove([storagePath(authUserId, observationId)])
+    .catch(() => {});
   return { error: null };
 }

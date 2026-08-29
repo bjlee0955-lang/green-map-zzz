@@ -130,7 +130,7 @@ async function restoreObservations(user: StoredUser): Promise<PlantObservation[]
   const local = loadObservations();
   if (user.authProvider !== "google") return local;
 
-  const { rows, error } = await fetchMyObservations(user.userId);
+  const { rows, error } = await fetchMyObservations();
   if (error) {
     alert(`관찰 기록을 불러오지 못했습니다.\n${error}`);
     return local;

@@ -13,6 +13,7 @@ import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { signInWithGoogle } from "../lib/googleAuth";
 import { fetchProfile, upsertProfile, type RemoteProfile } from "../lib/profiles";
 import { loadModelAssets } from "../lib/modelStore";
+import { saveObservationToServer, fetchMyObservations, photoPublicUrl } from "../lib/observations";
 
 type Screen = "landing" | "login" | "signup" | "googleProfile" | "home" | "upload" | "result" | "map" | "myrecords" | "settings";
 type Role = "student" | "teacher";
@@ -121,6 +122,51 @@ function upsertGoogleUser(googleUser: StoredUser): StoredUser {
   if (idx >= 0) users[idx] = merged; else users.push(merged);
   saveUsers(users);
   return merged;
+}
+
+// 서버에 저장된 기록을 앱이 쓰는 형태로 되돌린다. 화면들이 imgDataUrl을 <img src>로만
+// 쓰기 때문에 data URL 대신 Storage 공개 주소를 넣어도 그대로 표시된다.
+async function restoreObservations(user: StoredUser): Promise<PlantObservation[]> {
+  const local = loadObservations();
+  if (user.authProvider !== "google") return local;
+
+  const { rows, error } = await fetchMyObservations(user.userId);
+  if (error) {
+    alert(`관찰 기록을 불러오지 못했습니다.\n${error}`);
+    return local;
+  }
+
+  const fromServer: PlantObservation[] = rows.map((r) => ({
+    id: r.id,
+    name: r.species_name,
+    confidence: Number(r.confidence ?? 0),
+    date: r.created_at.slice(0, 10),
+    lat: r.lat ?? 0,
+    lng: r.lng ?? 0,
+    imgDataUrl: photoPublicUrl(r.image_path),
+    student: user.name,
+    userId: r.user_id,
+    address: r.address ?? "위치 정보 없음",
+  }));
+
+  // 같은 id는 서버 쪽을 정본으로 삼되, 아직 서버에 못 올린 이 기기의 기록은 남겨둔다.
+  const byId = new Map(local.map((o) => [o.id, o]));
+  fromServer.forEach((o) => byId.set(o.id, o));
+  const merged = [...byId.values()].sort((a, b) => a.date.localeCompare(b.date));
+  saveObservations(merged);
+  return merged;
+}
+
+// crypto.randomUUID()는 보안 컨텍스트에서만 있어, 없을 때를 대비한 대체 구현을 둔다.
+function newObservationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 // ── Guest (비회원) session ───────────────────────────────────────────────────
@@ -1480,7 +1526,8 @@ function ResultScreen({ capture, userName, userId, onBack, onSave }: {
   const handleSave = () => {
     if (!top) return;
     const obs: PlantObservation = {
-      id: Date.now().toString(),
+      // 서버의 observations.id가 uuid 컬럼이라 같은 값을 그대로 쓰려면 uuid여야 한다
+      id: newObservationId(),
       name: top.name,
       confidence: top.confidence,
       date: capture.date,
@@ -2062,7 +2109,7 @@ export default function App() {
       upsertGoogleUser(merged);
       saveCurrentUserId(merged.userId);
       setCurrentUser(merged);
-      setObservations(loadObservations());
+      setObservations(await restoreObservations(merged));
       // 서버 프로필이 없거나 아직 학교 정보가 없는 최초 Google 가입자는 추가 정보 입력 화면으로
       setScreen(isComplete ? "home" : "googleProfile");
     };
@@ -2106,6 +2153,24 @@ export default function App() {
       return next;
     });
     setTimeout(() => setScreen("home"), 1200);
+
+    // Google 계정이면 서버에도 남겨, 앱을 지웠다 깔아도 기록이 돌아오게 한다.
+    // 로컬 저장과 화면 전환은 이미 끝났으므로 업로드는 뒤에서 진행하고 실패만 알린다.
+    if (currentUser?.authProvider === "google") {
+      saveObservationToServer({
+        id: obs.id,
+        userId: obs.userId,
+        speciesName: obs.name,
+        confidence: obs.confidence,
+        imgDataUrl: obs.imgDataUrl,
+        lat: Number.isFinite(obs.lat) ? obs.lat : null,
+        lng: Number.isFinite(obs.lng) ? obs.lng : null,
+        address: obs.address,
+        createdAt: new Date().toISOString(),
+      }).then(({ error }) => {
+        if (error) alert(`기록을 서버에 저장하지 못했습니다.\n${error}`);
+      });
+    }
   };
 
   const handleLogout = () => {

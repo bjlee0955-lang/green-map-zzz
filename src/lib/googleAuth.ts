@@ -13,6 +13,15 @@ function parseCallbackParams(url: string): URLSearchParams {
   return new URLSearchParams(raw);
 }
 
+// 인증을 시작할 때 저장해둔 PKCE 검증값이 콜백 시점에 사라져 있으면 라이브러리가 긴 영어
+// 안내를 돌려주는데, 사용자가 할 수 있는 일은 다시 시도하는 것뿐이라 그것만 알려준다.
+function describeAuthError(message: string, url: string): string {
+  if (message.includes("code verifier") || message.includes("flow state")) {
+    return "로그인을 마치지 못했습니다.\n'Google로 계속하기'를 한 번 더 눌러주세요.";
+  }
+  return `${message}\n원본: ${url}`;
+}
+
 async function signInWithGoogleNative(): Promise<void> {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
@@ -62,10 +71,10 @@ async function signInWithGoogleNative(): Promise<void> {
 
       try {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) reject(new Error(`${exchangeError.message}\n원본: ${url}`));
+        if (exchangeError) reject(new Error(describeAuthError(exchangeError.message, url)));
         else resolve();
       } catch (e: any) {
-        reject(new Error(`${e?.message ?? e}\n원본: ${url}`));
+        reject(new Error(describeAuthError(e?.message ?? String(e), url)));
       }
     }).then((h) => {
       appUrlHandle = h;

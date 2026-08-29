@@ -2173,8 +2173,11 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    supabase.auth.signOut().catch(() => {});
+  const handleLogout = async () => {
+    // signOut()은 서버 요청을 마친 뒤에야 세션과 PKCE 검증값을 지운다. 기다리지 않고
+    // 화면부터 넘기면, 사용자가 곧바로 다시 로그인했을 때 뒤늦게 끝난 이 정리 작업이
+    // 새 로그인의 검증값까지 지워버려 "PKCE code verifier not found"로 실패한다.
+    await supabase.auth.signOut().catch(() => {});
     saveCurrentUserId(null);
     setCurrentUser(null);
     setObservations([]);

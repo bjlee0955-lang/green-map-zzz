@@ -64,10 +64,20 @@ export async function saveObservationToServer(params: {
 
   try {
     const blob = await dataUrlToBlob(params.imgDataUrl);
+    // upsert는 쓰지 않는다. 기록 id가 매번 새 uuid라 덮어쓸 일이 없고, upsert로 보내면
+    // 서버가 기존 객체를 먼저 조회하므로 INSERT 외의 정책까지 얽혀 실패 원인을 늘린다.
     const { error: uploadError } = await supabase.storage
       .from(PHOTO_BUCKET)
-      .upload(path, blob, { contentType: "image/jpeg", upsert: true });
-    if (uploadError) return { imagePath: null, error: `사진 업로드 실패: ${uploadError.message}` };
+      .upload(path, blob, { contentType: "image/jpeg" });
+    if (uploadError) {
+      // 정책 위반은 메시지만으로는 원인을 알 수 없어, 대조에 필요한 값을 함께 보여준다.
+      return {
+        imagePath: null,
+        error:
+          `사진 업로드 실패: ${uploadError.message}\n` +
+          `버킷: ${PHOTO_BUCKET}\n경로: ${path}\n로그인 계정: ${authUserId}`,
+      };
+    }
   } catch (e: any) {
     return { imagePath: null, error: `사진 준비 실패: ${e?.message ?? e}` };
   }
